@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
-use crate::database::{ComparisonId, get_components, get_packages, Opt, Package, PackageId, Version};
+use crate::database::{ComparisonId, get_components, get_packages, Opt, Package, PackageId, Version, Comparison, ComponentId};
 use crate::portfolio::{City, components_in_cities, Region};
 use crate::results::{CostCalculationSummaryLine, Scope};
 
@@ -8,7 +8,11 @@ use crate::results::{CostCalculationSummaryLine, Scope};
 // replaced by other comparisons in the given packages. Assume there are no cyclic
 // dependencies, i.e. comparisons replace each other mutually or transitively.
 fn get_replaced_comparsion_ids<'a>(packages: &[&'a Package]) -> HashSet<&'a ComparisonId> {
-    unimplemented!()
+    return packages
+        .iter()
+        .flat_map(|pkg| &pkg.comparisons)
+        .flat_map(|comparison| &comparison.replacing)
+        .collect();
 }
 
 // Given a list of packages, the version and a set of replaced comparisonIds,
@@ -18,9 +22,25 @@ fn get_replaced_comparsion_ids<'a>(packages: &[&'a Package]) -> HashSet<&'a Comp
 fn get_existing_and_selected_options<'a>(
     packages: &[&'a Package],
     version: &Version,
-    replaced_comparisons: HashSet<&ComparisonId>
+    replaced_comparisons: HashSet<&ComparisonId>,
 ) -> Vec<(Option<&'a Opt>, &'a Opt)> {
-    unimplemented!()
+    let mut result: Vec<(Option<&'a Opt>, &'a Opt)> = vec![];
+    packages
+        .iter()
+        .flat_map(|package| &package.comparisons)
+        .for_each(|comparison|
+            if !replaced_comparisons.contains(&comparison.id) {
+                let current = &comparison.options.iter().filter(|opt| opt.existing).collect::<Vec<_>>()[0];
+                let n = &version.selections
+                    .iter()
+                    .map(|selection| &selection.option_id)
+                    .collect::<Vec<_>>()[0];
+                let new = &comparison.options.iter().filter(|v| &v.id == *n).collect::<Vec<_>>()[0];
+                result.push((Some(*current), *new))
+            }
+        );
+
+    return result;
 }
 
 // Given an option and a city, compute the sum price of this option's
@@ -30,7 +50,17 @@ fn compute_costs_for_option_in_city(
     option: &Opt,
     city: &City,
 ) -> f32 {
-    unimplemented!()
+    let componentsIds = &option
+        .component_refs
+        .iter()
+        .map(|cr| &cr.component_id)
+        .collect::<Vec<_>>();
+
+    return get_components(componentsIds)
+        .iter()
+        .map(|component| {
+            *(components_in_cities(&component.category).get(&city).unwrap()) * component.price
+        }).sum();
 }
 
 // Given a list of packageIds and a version, calculate the cost summary lines for
@@ -51,9 +81,19 @@ fn compute_costs_for_option_in_city(
 #[allow(unused)]
 fn calculate_summary_lines(
     package_ids: &[&PackageId],
-    version: &Version
+    version: &Version,
 ) -> Vec<CostCalculationSummaryLine> {
-    unimplemented!()
+    let packages = get_packages(package_ids);
+
+    let options = get_existing_and_selected_options(
+        &packages,
+        &version,
+        get_replaced_comparsion_ids(&packages),
+    );
+
+    println!("{:?}", &options);
+
+    return vec![];
 }
 
 #[cfg(test)]
@@ -73,7 +113,7 @@ mod tests {
         let pkg_id2 = PackageId("package-2".into());
         let values = vec![
             (vec![&pkg_id1], HashSet::new()),
-            (vec![&pkg_id2], hashset!{ ComparisonId("comparison-1".into()) }),
+            (vec![&pkg_id2], hashset! { ComparisonId("comparison-1".into()) }),
         ];
 
         for (input, expectation) in values {
@@ -94,7 +134,7 @@ mod tests {
         let result = get_existing_and_selected_options(
             &pkg,
             get_version(&VersionId("v1".into())).unwrap(),
-            hashset! { &comparison_id }
+            hashset! { &comparison_id },
         );
 
         let comparison = pkg[0].comparisons.iter()
@@ -119,7 +159,7 @@ mod tests {
             .options.iter().find(|it| &it.id.0 == "door-1").unwrap();
         let result = compute_costs_for_option_in_city(
             opt,
-            &City::Berlin
+            &City::Berlin,
         );
 
         assert!(approx_eq!(f32, result, 150.0, epsilon = 0.00001));
@@ -134,7 +174,7 @@ mod tests {
             .options.iter().find(|it| &it.id.0 == "tiles-2").unwrap();
         let result = compute_costs_for_option_in_city(
             opt,
-            &City::Stockholm
+            &City::Stockholm,
         );
 
         assert!(approx_eq!(f32, result, 115.2, epsilon = 0.00001));
@@ -146,20 +186,18 @@ mod tests {
             &[
                 &PackageId("package-1".into()),
             ],
-            get_version(&VersionId("v1".into())).unwrap()
+            get_version(&VersionId("v1".into())).unwrap(),
         );
 
         let expectation = vec![
-            CostCalculationSummaryLine { scope: Scope::Group,                       existing_cost: 162, selected_cost: 172 },
-
+            CostCalculationSummaryLine { scope: Scope::Group, existing_cost: 162, selected_cost: 172 },
             CostCalculationSummaryLine { scope: Scope::Region(Region::Scandinavia), existing_cost: 256, selected_cost: 272 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Stockholm),       existing_cost: 308, selected_cost: 328 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Malmo),           existing_cost: 247, selected_cost: 262 },
-
-            CostCalculationSummaryLine { scope: Scope::Region(Region::Europe),      existing_cost: 201, selected_cost: 213 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Berlin),          existing_cost: 244, selected_cost: 259 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Hamburg),         existing_cost: 234, selected_cost: 249 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Munich),          existing_cost: 232, selected_cost: 247 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Stockholm), existing_cost: 308, selected_cost: 328 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Malmo), existing_cost: 247, selected_cost: 262 },
+            CostCalculationSummaryLine { scope: Scope::Region(Region::Europe), existing_cost: 201, selected_cost: 213 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Berlin), existing_cost: 244, selected_cost: 259 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Hamburg), existing_cost: 234, selected_cost: 249 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Munich), existing_cost: 232, selected_cost: 247 },
         ];
 
         assert_eq!(result, expectation);
@@ -173,20 +211,18 @@ mod tests {
                 &PackageId("package-2".into()),
                 &PackageId("package-3".into()),
             ],
-            get_version(&VersionId("v1".into())).unwrap()
+            get_version(&VersionId("v1".into())).unwrap(),
         );
 
         let expectation = vec![
-            CostCalculationSummaryLine { scope: Scope::Group,                       existing_cost: 0, selected_cost: 248 },
-
+            CostCalculationSummaryLine { scope: Scope::Group, existing_cost: 0, selected_cost: 248 },
             CostCalculationSummaryLine { scope: Scope::Region(Region::Scandinavia), existing_cost: 0, selected_cost: 393 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Stockholm),       existing_cost: 0, selected_cost: 475 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Malmo),           existing_cost: 0, selected_cost: 374 },
-
-            CostCalculationSummaryLine { scope: Scope::Region(Region::Europe),      existing_cost: 0, selected_cost: 306 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Berlin),          existing_cost: 0, selected_cost: 370 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Hamburg),         existing_cost: 0, selected_cost: 359 },
-            CostCalculationSummaryLine { scope: Scope::City(City::Munich),          existing_cost: 0, selected_cost: 358 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Stockholm), existing_cost: 0, selected_cost: 475 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Malmo), existing_cost: 0, selected_cost: 374 },
+            CostCalculationSummaryLine { scope: Scope::Region(Region::Europe), existing_cost: 0, selected_cost: 306 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Berlin), existing_cost: 0, selected_cost: 370 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Hamburg), existing_cost: 0, selected_cost: 359 },
+            CostCalculationSummaryLine { scope: Scope::City(City::Munich), existing_cost: 0, selected_cost: 358 },
         ];
 
         assert_eq!(result, expectation);
